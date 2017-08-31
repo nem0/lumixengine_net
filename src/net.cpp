@@ -23,7 +23,7 @@ struct NetPluginImpl : IPlugin
 		: m_engine(engine)
 		, m_allocator(engine.getAllocator())
 		, m_is_initialized(false)
-		, m_client_connections(m_allocator)
+		, m_connections(m_allocator)
 	{
 		if (enet_initialize() < 0)
 		{
@@ -78,13 +78,15 @@ struct NetPluginImpl : IPlugin
 	{
 		if (!m_is_initialized) return;
 
-		if (m_server) enet_host_destroy(m_server);
-		for(ClientConnection& c : m_client_connections)
+		for(Connection& c : m_connections)
 		{
 			if (!c.peer) continue;
 			enet_peer_reset(c.peer);
-			enet_host_destroy(c.host);
 		}
+
+		if (m_server_host) enet_host_destroy(m_server_host);
+		if (m_client_host) enet_host_destroy(m_client_host);
+
 		enet_deinitialize();
 	}
 
@@ -118,20 +120,47 @@ struct NetPluginImpl : IPlugin
 	}
 
 
+	int getConnection(const ENetPeer* peer) const
+	{
+		if (!peer) return -1;
+		for (int i = 0, c = m_connections.size(); i < c; ++i)
+		{
+			const Connection& conn = m_connections[i];
+			if (conn.peer == peer) return i;
+		}
+		return -1;
+	}
+
+
+	void disconnectPeer(const ENetPeer* peer)
+	{
+		int idx = getConnection(peer);
+		if (idx < 0) return;
+		m_connections[idx].peer = nullptr;
+	}
+
+
 	void update(float time_delta) override
 	{
 		ENetEvent event;
 
-		if (m_server)
+		if (m_server_host)
 		{
-			while (enet_host_service(m_server, &event, 0))
+			while (enet_host_service(m_server_host, &event, 0))
 			{
-				callLuaCallback(event, -1);
+				callLuaCallback(event, getConnection(event.peer));
 				switch (event.type)
 				{
 					case ENET_EVENT_TYPE_CONNECT:
+						{
+							int idx = allocConnection();
+							Connection& conn = m_connections[idx];
+							conn.is_server = true;
+							conn.peer = event.peer;
+						}
 						break;
 					case ENET_EVENT_TYPE_DISCONNECT:
+						disconnectPeer(event.peer);
 						break;
 					case ENET_EVENT_TYPE_RECEIVE:
 						break;
@@ -139,18 +168,17 @@ struct NetPluginImpl : IPlugin
 			}
 		}
 
-		for (int i = 0, c = m_client_connections.size(); i < c; ++i)
+		if (m_client_host)
 		{
-			ClientConnection& conn = m_client_connections[i];
-			if (!conn.host) continue;
-			while (enet_host_service(conn.host, &event, 0))
+			while (enet_host_service(m_client_host, &event, 0))
 			{
-				callLuaCallback(event, i);
+				callLuaCallback(event, getConnection(event.peer));
 				switch (event.type)
 				{
 					case ENET_EVENT_TYPE_CONNECT:
 						break;
 					case ENET_EVENT_TYPE_DISCONNECT:
+						disconnectPeer(event.peer);
 						break;
 					case ENET_EVENT_TYPE_RECEIVE:
 						break;
@@ -166,8 +194,8 @@ struct NetPluginImpl : IPlugin
 		address.port = port;
 		address.host = ENET_HOST_ANY;
 
-		m_server = enet_host_create(&address, max_clients, channels, 0, 0);
-		if (!m_server) return false;
+		m_server_host = enet_host_create(&address, max_clients, channels, 0, 0);
+		if (!m_server_host) return false;
 
 		return true;
 	}
@@ -181,62 +209,58 @@ struct NetPluginImpl : IPlugin
 
 	bool send(ConnectionHandle connection, int channel, const void* mem, int size, bool reliable)
 	{
-		if (connection >= m_client_connections.size() || !m_client_connections[connection].host)
+		if (connection >= m_connections.size() || !m_connections[connection].peer)
 		{
 			g_log_error.log("Network") << "Trying to send data through invalid connection.";
 			return false;
 		}
 		ENetPacket * packet = enet_packet_create(mem, size, reliable ? ENET_PACKET_FLAG_RELIABLE : 0);
-		ClientConnection& c = m_client_connections[connection];
+		Connection& c = m_connections[connection];
 		return enet_peer_send(c.peer, channel, packet) == 0;
+	}
+
+
+	int allocConnection()
+	{
+		for (int i = 0; i < m_connections.size(); ++i)
+		{
+			Connection& c = m_connections[i];
+			if (!c.peer) return i;
+		}
+
+		m_connections.emplace();
+		return m_connections.size() - 1;
 	}
 
 
 	ConnectionHandle connect(const char* host_name, u16 port, int channels)
 	{
-		int idx = -1;
-		for (int i = 0; i < m_client_connections.size(); ++i)
+		if(!m_client_host)
 		{
-			ClientConnection& c = m_client_connections[i];
-			if (!c.host)
-			{
-				idx = i;
-				break;
-			}
-		}
-		if (idx < 0)
-		{
-			idx = m_client_connections.size();
-			m_client_connections.emplace();
+			m_client_host = enet_host_create(nullptr, 64, channels, 0, 0);
+			if (!m_client_host) return -1;
 		}
 
-		ClientConnection& conn = m_client_connections[idx];
-		conn.host = enet_host_create(nullptr, 1, channels, 0, 0);
-		if(!conn.host) return -1;
+		int idx = allocConnection();
+		Connection& conn = m_connections[idx];
 
 		ENetAddress address;
 		enet_address_set_host(&address, host_name);
 		address.port = port;
-		conn.peer = enet_host_connect(conn.host, &address, channels, 0);
-		if (!conn.peer)
-		{
-			enet_host_destroy(conn.host);
-			conn.host = nullptr;
-			return -1;
-		}
+		conn.peer = enet_host_connect(m_client_host, &address, channels, 0);
 
-		return idx;
+		return conn.peer ? idx : -1;
 	}
 
 
 	void disconnect(ConnectionHandle idx)
 	{
-		if (idx >= m_client_connections.size() || !m_client_connections[idx].host)
+		if (idx >= m_connections.size() || !m_connections[idx].peer)
 		{
 			g_log_error.log("Network") << "Trying to close invalid connection.";
 			return;
 		}
-		enet_peer_disconnect(m_client_connections[idx].peer, 0);
+		enet_peer_disconnect(m_connections[idx].peer, 0);
 	}
 
 
@@ -245,15 +269,16 @@ struct NetPluginImpl : IPlugin
 
 	Engine& m_engine;
 	IAllocator& m_allocator;
-	ENetHost* m_server = nullptr;
+	ENetHost* m_server_host = nullptr;
+	ENetHost* m_client_host = nullptr;
 
-	struct ClientConnection
+	struct Connection
 	{
 		ENetPeer* peer = nullptr;
-		ENetHost* host = nullptr;
+		bool is_server = false;
 	};
 
-	Array<ClientConnection> m_client_connections;
+	Array<Connection> m_connections;
 	bool m_is_initialized = false;
 	int m_lua_callback_ref = -1;
 	lua_State* m_lua_callback_state = nullptr;
