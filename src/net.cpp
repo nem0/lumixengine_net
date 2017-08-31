@@ -248,6 +248,7 @@ struct NetPluginImpl : IPlugin
 		enet_address_set_host(&address, host_name);
 		address.port = port;
 		conn.peer = enet_host_connect(m_client_host, &address, channels, 0);
+		conn.is_server = false;
 
 		return conn.peer ? idx : -1;
 	}
