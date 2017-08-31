@@ -14,7 +14,7 @@ namespace Lumix
 {
 
 
-typedef u16 ConnectionHandle;
+typedef int ConnectionHandle;
 
 
 struct NetPluginImpl : IPlugin 
@@ -67,7 +67,8 @@ struct NetPluginImpl : IPlugin
 			REGISTER_FUNCTION(createServer);
 			REGISTER_FUNCTION(connect);
 			REGISTER_FUNCTION(sendString);
-			REGISTER_FUNCTION(disconnect);
+			REGISTER_FUNCTION(eventPacketToString);
+			REGISTER_FUNCTION(disconnect); 
 
 		#undef REGISTER_FUNCTION
 	}
@@ -85,6 +86,15 @@ struct NetPluginImpl : IPlugin
 			enet_host_destroy(c.host);
 		}
 		enet_deinitialize();
+	}
+
+
+	const char* eventPacketToString(ENetEvent* event)
+	{
+		if (!event->packet) return "";
+		if (event->packet->dataLength == 0) return "";
+		if (event->packet->data[event->packet->dataLength - 1] != '\0') return "";
+		return (const char*)event->packet->data;
 	}
 
 
