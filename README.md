@@ -1,5 +1,6 @@
-# lumixengine_net
-Network plugin for Lumix Engine. Work in progress.
+# Network plugin for [Lumix Engine](https://github.com/nem0/lumixengine). 
+
+Very early in development.
 
 [Getting started](https://www.youtube.com/watch?v=NAUASTmoulQ)
 
