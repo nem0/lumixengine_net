@@ -8,7 +8,7 @@ project "lumixengine_net"
 		"src/**.h",
 		"genie.lua"
 	}
-	includedirs { "../lumixengine_net/src", "external/enet/include" }
+	includedirs { "../lumixengine_net/src", "external/enet/include", "../lumixengine/external/lua/include" }
 	defines { "BUILDING_NET", "_WINSOCK_DEPRECATED_NO_WARNINGS" }
 	links { "engine" }
 	useLua()
