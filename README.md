@@ -1,6 +1,8 @@
 # lumixengine_net
 Network plugin for Lumix Engine. Work in progress.
 
+[Getting started](https://www.youtube.com/watch?v=NAUASTmoulQ)
+
 # Low Level API
 
 Create server
