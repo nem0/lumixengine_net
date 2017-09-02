@@ -1,9 +1,11 @@
-#include "engine/engine.h"
 #include "enet/enet.h"
+#include "engine/engine.h"
+#include "engine/blob.h"
 #include "engine/iallocator.h"
 #include "engine/iplugin.h"
 #include "engine/log.h"
 #include "engine/lua_wrapper.h"
+#include "engine/property_register.h"
 
 
 #pragma comment(lib, "Ws2_32.lib")
@@ -19,6 +21,11 @@ typedef int ConnectionHandle;
 
 struct NetPluginImpl : IPlugin 
 {
+	enum class Command : u32
+	{
+		RPC = 0
+	};
+
 	NetPluginImpl(Engine& engine)
 		: m_engine(engine)
 		, m_allocator(engine.getAllocator())
@@ -32,6 +39,48 @@ struct NetPluginImpl : IPlugin
 		}
 		m_is_initialized = true;
 		registerLuaAPI(engine.getState());
+	}
+
+
+	static int remoteCall(lua_State* L)
+	{
+		NetPluginImpl* that = LuaWrapper::checkArg<NetPluginImpl*>(L, 1);
+		ConnectionHandle connection = LuaWrapper::checkArg<ConnectionHandle>(L, 2);
+		const char* func_name = LuaWrapper::checkArg<const char*>(L, 3);
+		int func_arg_count = lua_gettop(L) - 3;
+
+		char buf[1024];
+		// TODO handle overflow in blob
+		OutputBlob blob(buf, sizeof(buf));
+		blob.write(Command::RPC);
+		blob.writeString(func_name);
+		blob.write(func_arg_count);
+
+		for (int i = 0; i < func_arg_count; ++i)
+		{
+			int type = lua_type(L, i + 4);
+			switch (type)
+			{
+				case LUA_TSTRING:
+					blob.write(type);
+					blob.writeString(lua_tostring(L, i + 4));
+					break;
+				case LUA_TNUMBER:
+					blob.write(type);
+					blob.write(lua_tonumber(L, i + 4));
+					break;
+				case LUA_TBOOLEAN:
+					blob.write(type);
+					blob.write(lua_toboolean(L, i + 4) != 0);
+					break;
+				default:
+					g_log_error.log("Network") << "Can not RPC " << func_name << ", #" << i + 1 << "argument's type is not supported";
+					return 0;
+			}
+		}
+
+		that->send(connection, 0, buf, blob.getPos(), true);
+		return 0;
 	}
 
 
@@ -64,6 +113,7 @@ struct NetPluginImpl : IPlugin
 			} while(false) \
 
 			LuaWrapper::createSystemFunction(L, "Network", "setCallback", &NetPluginImpl::setCallback);
+			LuaWrapper::createSystemFunction(L, "Network", "call", &NetPluginImpl::remoteCall);
 			REGISTER_FUNCTION(createServer);
 			REGISTER_FUNCTION(connect);
 			REGISTER_FUNCTION(sendString);
@@ -140,6 +190,84 @@ struct NetPluginImpl : IPlugin
 	}
 
 
+	void RPC(InputBlob* blob)
+	{
+		char func_name[128];
+		blob->readString(func_name, lengthOf(func_name));
+		lua_State* L = m_engine.getState();
+		lua_getglobal(L, "Network"); // [Network]
+		lua_getfield(L, -1, "RPCFunctions"); // [Network, Network.RPCFunctions] 
+		if (!lua_istable(L, -1))
+		{
+			lua_pop(L, 2); // []
+			g_log_error.log("Network") << "Unknown RPC function" << func_name;
+			return;
+		}
+		lua_getfield(L, -1, func_name);  // [Network, Network.RPCFunctions, func] 
+		if(!lua_isfunction(L, -1))
+		{ 
+			lua_pop(L, 3); // []
+			g_log_error.log("Network") << "Unknown RPC function" << func_name;
+			return;
+		}
+
+		int func_arg_count = blob->read<int>();
+		for (int i = 0; i < func_arg_count; ++i)
+		{
+			int type = blob->read<int>();
+			switch(type)
+			{
+				case LUA_TSTRING:
+				{
+					char tmp[1024];
+					blob->readString(tmp, lengthOf(tmp));
+					lua_pushstring(L, tmp); // [Network, Network.RPCFunctions, func, args...] 
+					break;
+				}
+				case LUA_TNUMBER:
+				{
+					lua_Number n = blob->read<lua_Number>();
+					lua_pushnumber(L, n);
+					break;
+				}
+				case LUA_TBOOLEAN:
+				{
+					bool b = blob->read<bool>();
+					lua_pushboolean(L, b ? 1 : 0);
+					break;
+				}
+				default:
+					lua_pop(L, 3 + i);
+					g_log_error.log("Network") << func_name << ": type of argument #" << i + 1 << " not supported by RPC";
+					return;
+			}
+		}
+		if (lua_pcall(L, func_arg_count, 0, 0) != LUA_OK)// [Network, Network.RPCFunctions] 
+		{
+			g_log_error.log("Network") << lua_tostring(L, -1);
+			lua_pop(L, 1);
+		}
+		lua_pop(L, 2); // []
+	}
+
+
+	void commandReceived(const ENetEvent& event)
+	{
+		InputBlob blob(event.packet->data, (int)event.packet->dataLength);
+		Command command = blob.read<Command>();
+		switch (command)
+		{
+			case Command::RPC:
+				RPC(&blob);
+				break;
+			default:
+				ASSERT(false);
+				g_log_error.log("Network") << "Unknown command received";
+				break;
+		}
+	}
+
+
 	void update(float time_delta) override
 	{
 		ENetEvent event;
@@ -163,6 +291,7 @@ struct NetPluginImpl : IPlugin
 						disconnectPeer(event.peer);
 						break;
 					case ENET_EVENT_TYPE_RECEIVE:
+						if (event.channelID == 0) commandReceived(event);
 						break;
 				}
 			}
@@ -181,6 +310,7 @@ struct NetPluginImpl : IPlugin
 						disconnectPeer(event.peer);
 						break;
 					case ENET_EVENT_TYPE_RECEIVE:
+						if (event.channelID == 0) commandReceived(event);
 						break;
 				}
 			}
