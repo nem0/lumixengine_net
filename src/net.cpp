@@ -21,11 +21,15 @@ typedef int ConnectionHandle;
 
 struct NetPluginImpl : IPlugin 
 {
-	enum class Command : u32
+	enum class Channel : int
 	{
-		RPC = 0
-	};
+		RPC = 0,
+		LUA_STRING = 1,
+		USER = 2,
 
+		COUNT
+	};
+		
 	NetPluginImpl(Engine& engine)
 		: m_engine(engine)
 		, m_allocator(engine.getAllocator())
@@ -52,7 +56,6 @@ struct NetPluginImpl : IPlugin
 		char buf[1024];
 		// TODO handle overflow in blob
 		OutputBlob blob(buf, sizeof(buf));
-		blob.write(Command::RPC);
 		blob.writeString(func_name);
 		blob.write(func_arg_count);
 
@@ -79,7 +82,7 @@ struct NetPluginImpl : IPlugin
 			}
 		}
 
-		that->send(connection, 0, buf, blob.getPos(), true);
+		that->send(connection, (int)Channel::RPC, buf, blob.getPos(), true);
 		return 0;
 	}
 
@@ -182,14 +185,6 @@ struct NetPluginImpl : IPlugin
 	}
 
 
-	void disconnectPeer(const ENetPeer* peer)
-	{
-		int idx = getConnection(peer);
-		if (idx < 0) return;
-		m_connections[idx].peer = nullptr;
-	}
-
-
 	void RPC(InputBlob* blob)
 	{
 		char func_name[128];
@@ -251,18 +246,38 @@ struct NetPluginImpl : IPlugin
 	}
 
 
-	void commandReceived(const ENetEvent& event)
+	void handleEvent(const ENetEvent& event)
 	{
-		InputBlob blob(event.packet->data, (int)event.packet->dataLength);
-		Command command = blob.read<Command>();
-		switch (command)
+		switch (event.type)
 		{
-			case Command::RPC:
-				RPC(&blob);
+			case ENET_EVENT_TYPE_CONNECT:
+				{
+					int idx = allocConnection();
+					Connection& conn = m_connections[idx];
+					conn.is_server = true;
+					conn.peer = event.peer;
+				}
 				break;
-			default:
-				ASSERT(false);
-				g_log_error.log("Network") << "Unknown command received";
+			case ENET_EVENT_TYPE_DISCONNECT:
+				{
+					int idx = getConnection(event.peer);
+					if (idx < 0) return;
+					m_connections[idx].peer = nullptr;
+				}
+				break;
+			case ENET_EVENT_TYPE_RECEIVE:
+				switch ((Channel)event.channelID)
+				{
+					case Channel::RPC:
+						{
+							InputBlob blob(event.packet->data, (int)event.packet->dataLength);
+							RPC(&blob);
+						}
+						break;
+					case Channel::LUA_STRING:
+						callLuaCallback(event, getConnection(event.peer));
+						break;
+				}
 				break;
 		}
 	}
@@ -276,24 +291,7 @@ struct NetPluginImpl : IPlugin
 		{
 			while (enet_host_service(m_server_host, &event, 0))
 			{
-				callLuaCallback(event, getConnection(event.peer));
-				switch (event.type)
-				{
-					case ENET_EVENT_TYPE_CONNECT:
-						{
-							int idx = allocConnection();
-							Connection& conn = m_connections[idx];
-							conn.is_server = true;
-							conn.peer = event.peer;
-						}
-						break;
-					case ENET_EVENT_TYPE_DISCONNECT:
-						disconnectPeer(event.peer);
-						break;
-					case ENET_EVENT_TYPE_RECEIVE:
-						if (event.channelID == 0) commandReceived(event);
-						break;
-				}
+				handleEvent(event);
 			}
 		}
 
@@ -301,39 +299,28 @@ struct NetPluginImpl : IPlugin
 		{
 			while (enet_host_service(m_client_host, &event, 0))
 			{
-				callLuaCallback(event, getConnection(event.peer));
-				switch (event.type)
-				{
-					case ENET_EVENT_TYPE_CONNECT:
-						break;
-					case ENET_EVENT_TYPE_DISCONNECT:
-						disconnectPeer(event.peer);
-						break;
-					case ENET_EVENT_TYPE_RECEIVE:
-						if (event.channelID == 0) commandReceived(event);
-						break;
-				}
+				handleEvent(event);
 			}
 		}
 	}
 
 
-	bool createServer(u16 port, int max_clients, int channels)
+	bool createServer(u16 port, int max_clients)
 	{
 		ENetAddress address;
 		address.port = port;
 		address.host = ENET_HOST_ANY;
 
-		m_server_host = enet_host_create(&address, max_clients, channels, 0, 0);
+		m_server_host = enet_host_create(&address, max_clients, (int)Channel::COUNT, 0, 0);
 		if (!m_server_host) return false;
 
 		return true;
 	}
 
 
-	bool sendString(ConnectionHandle connection, int channel, const char* message, bool reliable)
+	bool sendString(ConnectionHandle connection, const char* message, bool reliable)
 	{
-		return send(connection, channel, message, stringLength(message) + 1, reliable);
+		return send(connection, (int)Channel::LUA_STRING, message, stringLength(message) + 1, reliable);
 	}
 
 
@@ -363,11 +350,11 @@ struct NetPluginImpl : IPlugin
 	}
 
 
-	ConnectionHandle connect(const char* host_name, u16 port, int channels)
+	ConnectionHandle connect(const char* host_name, u16 port)
 	{
 		if(!m_client_host)
 		{
-			m_client_host = enet_host_create(nullptr, 64, channels, 0, 0);
+			m_client_host = enet_host_create(nullptr, 64, (int)Channel::COUNT, 0, 0);
 			if (!m_client_host) return -1;
 		}
 
@@ -377,7 +364,7 @@ struct NetPluginImpl : IPlugin
 		ENetAddress address;
 		enet_address_set_host(&address, host_name);
 		address.port = port;
-		conn.peer = enet_host_connect(m_client_host, &address, channels, 0);
+		conn.peer = enet_host_connect(m_client_host, &address, (int)Channel::COUNT, 0);
 		conn.is_server = false;
 
 		return conn.peer ? idx : -1;
