@@ -50,6 +50,8 @@ struct NetPluginImpl : IPlugin
 	{
 		NetPluginImpl* that = LuaWrapper::checkArg<NetPluginImpl*>(L, 1);
 		ConnectionHandle connection = LuaWrapper::checkArg<ConnectionHandle>(L, 2);
+		bool is_connection_valid = connection >= 0 && connection < that->m_connections.size();
+		if (!is_connection_valid) luaL_argerror(L, 2, "invalid connection");
 		const char* func_name = LuaWrapper::checkArg<const char*>(L, 3);
 		int func_arg_count = lua_gettop(L) - 3;
 
