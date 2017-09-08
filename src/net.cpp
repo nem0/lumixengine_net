@@ -256,6 +256,7 @@ struct NetPluginImpl : IPlugin
 					Connection& conn = m_connections[idx];
 					conn.is_server = true;
 					conn.peer = event.peer;
+					callLuaCallback(event, getConnection(event.peer));
 				}
 				break;
 			case ENET_EVENT_TYPE_DISCONNECT:
@@ -263,6 +264,7 @@ struct NetPluginImpl : IPlugin
 					int idx = getConnection(event.peer);
 					if (idx < 0) return;
 					m_connections[idx].peer = nullptr;
+					callLuaCallback(event, getConnection(event.peer));
 				}
 				break;
 			case ENET_EVENT_TYPE_RECEIVE:
