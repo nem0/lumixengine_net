@@ -1,11 +1,11 @@
-#include "enet/enet.h"
 #include "engine/engine.h"
-#include "engine/blob.h"
-#include "engine/iallocator.h"
-#include "engine/iplugin.h"
+#include "engine/allocator.h"
+#include "engine/array.h"
+#include "engine/plugin.h"
 #include "engine/log.h"
 #include "engine/lua_wrapper.h"
-#include "engine/property_register.h"
+#include "engine/stream.h"
+#include "enet/enet.h"
 
 
 #pragma comment(lib, "Ws2_32.lib")
@@ -38,68 +38,65 @@ struct NetPluginImpl : IPlugin
 	{
 		if (enet_initialize() < 0)
 		{
-			g_log_error.log("Network") << "Failed to initialize network.";
+			logError("Failed to initialize network.");
 			return;
 		}
 		m_is_initialized = true;
 		registerLuaAPI(engine.getState());
 	}
 
+	void serialize(OutputMemoryStream& serializer) const override {}
+	bool deserialize(u32 version, InputMemoryStream& serializer) override { return true; }
 
-	static int remoteCall(lua_State* L)
-	{
-		NetPluginImpl* that = LuaWrapper::checkArg<NetPluginImpl*>(L, 1);
-		ConnectionHandle connection = LuaWrapper::checkArg<ConnectionHandle>(L, 2);
+	static int remoteCall(lua_State* L) {
+		NetPluginImpl* that = LuaWrapper::toType<NetPluginImpl*>(L, lua_upvalueindex(1));
+		
+		ConnectionHandle connection = LuaWrapper::checkArg<ConnectionHandle>(L, 1);
 		bool is_connection_valid = connection >= 0 && connection < that->m_connections.size();
-		if (!is_connection_valid) luaL_argerror(L, 2, "invalid connection");
-		const char* func_name = LuaWrapper::checkArg<const char*>(L, 3);
-		int func_arg_count = lua_gettop(L) - 3;
+		if (!is_connection_valid) luaL_argerror(L, 1, "invalid connection");
+		const char* func_name = LuaWrapper::checkArg<const char*>(L, 2);
+		int func_arg_count = lua_gettop(L) - 2;
 
 		char buf[1024];
 		// TODO handle overflow in blob
-		OutputBlob blob(buf, sizeof(buf));
+		OutputMemoryStream blob(buf, sizeof(buf));
 		blob.writeString(func_name);
 		blob.write(func_arg_count);
 
-		for (int i = 0; i < func_arg_count; ++i)
-		{
-			int type = lua_type(L, i + 4);
-			switch (type)
-			{
+		for (int i = 0; i < func_arg_count; ++i) {
+			int type = lua_type(L, i + 3);
+			switch (type) {
 				case LUA_TSTRING:
 					blob.write(type);
-					blob.writeString(lua_tostring(L, i + 4));
+					blob.writeString(lua_tostring(L, i + 3));
 					break;
 				case LUA_TNUMBER:
 					blob.write(type);
-					blob.write(lua_tonumber(L, i + 4));
+					blob.write(lua_tonumber(L, i + 3));
 					break;
 				case LUA_TBOOLEAN:
 					blob.write(type);
-					blob.write(lua_toboolean(L, i + 4) != 0);
+					blob.write(lua_toboolean(L, i + 3) != 0);
 					break;
-				default:
-					g_log_error.log("Network") << "Can not RPC " << func_name << ", #" << i + 1 << "argument's type is not supported";
-					return 0;
+				default: logError("Can not RPC ", func_name, ", #", i + 1, "argument's type is not supported"); return 0;
 			}
 		}
 
-		that->send(connection, (int)Channel::RPC, buf, blob.getPos(), true);
+		that->send(connection, (int)Channel::RPC, buf, (u32)blob.size(), true);
 		return 0;
 	}
 
 
-	static int setCallback(lua_State* L)
-	{
-		NetPluginImpl* that = LuaWrapper::checkArg<NetPluginImpl*>(L, 1);
-		if (!lua_isfunction(L, 2)) LuaWrapper::argError(L, 2, "function");
-		
-		if (that->m_lua_callback_ref != -1)
-		{
+	static int setCallback(lua_State* L) {
+		NetPluginImpl* that = LuaWrapper::toType<NetPluginImpl*>(L, lua_upvalueindex(1));
+
+		if (!lua_isfunction(L, 1)) LuaWrapper::argError(L, 1, "function");
+
+		if (that->m_lua_callback_ref != -1) {
 			luaL_unref(that->m_lua_callback_state, LUA_REGISTRYINDEX, that->m_lua_callback_ref);
 		}
 
-		lua_pushvalue(L, 2);
+		lua_pushvalue(L, 1);
 		that->m_lua_callback_state = L;
 		that->m_lua_callback_ref = luaL_ref(L, LUA_REGISTRYINDEX);
 		lua_pop(L, 1);
@@ -109,16 +106,14 @@ struct NetPluginImpl : IPlugin
 
 	void registerLuaAPI(lua_State* L)
 	{
-		lua_pushlightuserdata(L, this);
-		lua_setglobal(L, "g_network");
 		#define REGISTER_FUNCTION(name) \
 			do {\
-				auto f = &LuaWrapper::wrapMethod<NetPluginImpl, decltype(&NetPluginImpl::name), &NetPluginImpl::name>; \
-				LuaWrapper::createSystemFunction(L, "Network", #name, f); \
+				auto f = &LuaWrapper::wrapMethodClosure<&NetPluginImpl::name>; \
+				LuaWrapper::createSystemClosure(L, "Network", this, #name, f); \
 			} while(false) \
 
-			LuaWrapper::createSystemFunction(L, "Network", "setCallback", &NetPluginImpl::setCallback);
-			LuaWrapper::createSystemFunction(L, "Network", "call", &NetPluginImpl::remoteCall);
+			LuaWrapper::createSystemClosure(L, "Network", this, "setCallback", &NetPluginImpl::setCallback);
+			LuaWrapper::createSystemClosure(L, "Network", this, "call", &NetPluginImpl::remoteCall);
 			REGISTER_FUNCTION(createServer);
 			REGISTER_FUNCTION(connect);
 			REGISTER_FUNCTION(sendString);
@@ -159,17 +154,14 @@ struct NetPluginImpl : IPlugin
 	{
 		if (m_lua_callback_ref == -1) return;
 
-		if (lua_rawgeti(m_lua_callback_state, LUA_REGISTRYINDEX, m_lua_callback_ref) != LUA_TFUNCTION)
-		{
-			ASSERT(false);
-		}
+		lua_rawgeti(m_lua_callback_state, LUA_REGISTRYINDEX, m_lua_callback_ref);
 
 		LuaWrapper::push(m_lua_callback_state, (int)event.type);
 		LuaWrapper::push(m_lua_callback_state, connection);
 		LuaWrapper::push(m_lua_callback_state, &event);
 		if (lua_pcall(m_lua_callback_state, 3, 0, 0) != LUA_OK)
 		{
-			g_log_error.log("Network") << lua_tostring(m_lua_callback_state, -1);
+			logError(lua_tostring(m_lua_callback_state, -1));
 			lua_pop(m_lua_callback_state, 1);
 		}
 	}
@@ -187,24 +179,23 @@ struct NetPluginImpl : IPlugin
 	}
 
 
-	void RPC(InputBlob* blob)
+	void RPC(InputMemoryStream* blob)
 	{
-		char func_name[128];
-		blob->readString(func_name, lengthOf(func_name));
+		const char* func_name = blob->readString();
 		lua_State* L = m_engine.getState();
 		lua_getglobal(L, "Network"); // [Network]
 		lua_getfield(L, -1, "RPCFunctions"); // [Network, Network.RPCFunctions] 
 		if (!lua_istable(L, -1))
 		{
 			lua_pop(L, 2); // []
-			g_log_error.log("Network") << "Unknown RPC function" << func_name;
+			logError("Unknown RPC function", func_name);
 			return;
 		}
 		lua_getfield(L, -1, func_name);  // [Network, Network.RPCFunctions, func] 
 		if(!lua_isfunction(L, -1))
 		{ 
 			lua_pop(L, 3); // []
-			g_log_error.log("Network") << "Unknown RPC function" << func_name;
+			logError("Unknown RPC function", func_name);
 			return;
 		}
 
@@ -216,8 +207,7 @@ struct NetPluginImpl : IPlugin
 			{
 				case LUA_TSTRING:
 				{
-					char tmp[1024];
-					blob->readString(tmp, lengthOf(tmp));
+					const char* tmp = blob->readString();
 					lua_pushstring(L, tmp); // [Network, Network.RPCFunctions, func, args...] 
 					break;
 				}
@@ -235,13 +225,13 @@ struct NetPluginImpl : IPlugin
 				}
 				default:
 					lua_pop(L, 3 + i);
-					g_log_error.log("Network") << func_name << ": type of argument #" << i + 1 << " not supported by RPC";
+					logError(func_name, ": type of argument #", i + 1, " not supported by RPC");
 					return;
 			}
 		}
 		if (lua_pcall(L, func_arg_count, 0, 0) != LUA_OK)// [Network, Network.RPCFunctions] 
 		{
-			g_log_error.log("Network") << lua_tostring(L, -1);
+			logError(lua_tostring(L, -1));
 			lua_pop(L, 1);
 		}
 		lua_pop(L, 2); // []
@@ -274,7 +264,7 @@ struct NetPluginImpl : IPlugin
 				{
 					case Channel::RPC:
 						{
-							InputBlob blob(event.packet->data, (int)event.packet->dataLength);
+							InputMemoryStream blob(event.packet->data, (int)event.packet->dataLength);
 							RPC(&blob);
 						}
 						break;
@@ -328,11 +318,11 @@ struct NetPluginImpl : IPlugin
 	}
 
 
-	bool send(ConnectionHandle connection, int channel, const void* mem, int size, bool reliable)
+	bool send(ConnectionHandle connection, int channel, const void* mem, u32 size, bool reliable)
 	{
 		if (connection >= m_connections.size() || !m_connections[connection].peer)
 		{
-			g_log_error.log("Network") << "Trying to send data through invalid connection.";
+			logError("Trying to send data through invalid connection.");
 			return false;
 		}
 		ENetPacket * packet = enet_packet_create(mem, size, reliable ? ENET_PACKET_FLAG_RELIABLE : 0);
@@ -374,12 +364,13 @@ struct NetPluginImpl : IPlugin
 		return conn.peer ? idx : -1;
 	}
 
+	u32 getVersion() const override { return 0; }
 
 	void disconnect(ConnectionHandle idx)
 	{
 		if (idx >= m_connections.size() || !m_connections[idx].peer)
 		{
-			g_log_error.log("Network") << "Trying to close invalid connection.";
+			logError("Trying to close invalid connection.");
 			return;
 		}
 		enet_peer_disconnect(m_connections[idx].peer, 0);
@@ -407,7 +398,7 @@ struct NetPluginImpl : IPlugin
 };
 
 
-LUMIX_PLUGIN_ENTRY(lumixengine_net)
+LUMIX_PLUGIN_ENTRY(net)
 {
 	IAllocator& allocator = engine.getAllocator();
 	NetPluginImpl* plugin = LUMIX_NEW(allocator, NetPluginImpl)(engine);

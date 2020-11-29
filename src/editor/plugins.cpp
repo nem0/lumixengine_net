@@ -5,8 +5,8 @@ namespace Lumix
 {
 
 
-LUMIX_STUDIO_ENTRY(lumixengine_net)
-{
+LUMIX_STUDIO_ENTRY(net) {
+	return nullptr;
 }
 
 
