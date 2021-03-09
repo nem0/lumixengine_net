@@ -5,6 +5,7 @@
 #include "engine/log.h"
 #include "engine/lua_wrapper.h"
 #include "engine/stream.h"
+#include "engine/string.h"
 #include "enet/enet.h"
 
 
