@@ -272,8 +272,16 @@ struct NetPluginImpl : IPlugin
 					case Channel::LUA_STRING:
 						callLuaCallback(event, getConnection(event.peer));
 						break;
+					case Channel::USER:
+						ASSERT(false);
+						// TODO
+						break;
+					case Channel::COUNT:
+						ASSERT(false);
+						break;
 				}
 				break;
+			case ENET_EVENT_TYPE_NONE: ASSERT(false); break;
 		}
 	}
 
