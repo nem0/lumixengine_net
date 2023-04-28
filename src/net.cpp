@@ -20,7 +20,7 @@ namespace Lumix
 typedef int ConnectionHandle;
 
 
-struct NetPluginImpl : IPlugin 
+struct NetSystemImpl : ISystem 
 {
 	enum class Channel : int
 	{
@@ -31,7 +31,7 @@ struct NetPluginImpl : IPlugin
 		COUNT
 	};
 		
-	NetPluginImpl(Engine& engine)
+	NetSystemImpl(Engine& engine)
 		: m_engine(engine)
 		, m_allocator(engine.getAllocator())
 		, m_is_initialized(false)
@@ -47,10 +47,10 @@ struct NetPluginImpl : IPlugin
 	}
 
 	void serialize(OutputMemoryStream& serializer) const override {}
-	bool deserialize(u32 version, InputMemoryStream& serializer) override { return true; }
+	bool deserialize(i32 version, InputMemoryStream& serializer) override { return version == 0; }
 
 	static int remoteCall(lua_State* L) {
-		NetPluginImpl* that = LuaWrapper::toType<NetPluginImpl*>(L, lua_upvalueindex(1));
+		NetSystemImpl* that = LuaWrapper::toType<NetSystemImpl*>(L, lua_upvalueindex(1));
 		
 		ConnectionHandle connection = LuaWrapper::checkArg<ConnectionHandle>(L, 1);
 		bool is_connection_valid = connection >= 0 && connection < that->m_connections.size();
@@ -89,7 +89,7 @@ struct NetPluginImpl : IPlugin
 
 
 	static int setCallback(lua_State* L) {
-		NetPluginImpl* that = LuaWrapper::toType<NetPluginImpl*>(L, lua_upvalueindex(1));
+		NetSystemImpl* that = LuaWrapper::toType<NetSystemImpl*>(L, lua_upvalueindex(1));
 
 		if (!lua_isfunction(L, 1)) LuaWrapper::argError(L, 1, "function");
 
@@ -109,12 +109,12 @@ struct NetPluginImpl : IPlugin
 	{
 		#define REGISTER_FUNCTION(name) \
 			do {\
-				auto f = &LuaWrapper::wrapMethodClosure<&NetPluginImpl::name>; \
+				auto f = &LuaWrapper::wrapMethodClosure<&NetSystemImpl::name>; \
 				LuaWrapper::createSystemClosure(L, "Network", this, #name, f); \
 			} while(false) \
 
-			LuaWrapper::createSystemClosure(L, "Network", this, "setCallback", &NetPluginImpl::setCallback);
-			LuaWrapper::createSystemClosure(L, "Network", this, "call", &NetPluginImpl::remoteCall);
+			LuaWrapper::createSystemClosure(L, "Network", this, "setCallback", &NetSystemImpl::setCallback);
+			LuaWrapper::createSystemClosure(L, "Network", this, "call", &NetSystemImpl::remoteCall);
 			REGISTER_FUNCTION(createServer);
 			REGISTER_FUNCTION(connect);
 			REGISTER_FUNCTION(sendString);
@@ -125,7 +125,7 @@ struct NetPluginImpl : IPlugin
 	}
 
 	
-	~NetPluginImpl() override
+	~NetSystemImpl() override
 	{
 		if (!m_is_initialized) return;
 
@@ -373,8 +373,6 @@ struct NetPluginImpl : IPlugin
 		return conn.peer ? idx : -1;
 	}
 
-	u32 getVersion() const override { return 0; }
-
 	void disconnect(ConnectionHandle idx)
 	{
 		if (idx >= m_connections.size() || !m_connections[idx].peer)
@@ -410,7 +408,7 @@ struct NetPluginImpl : IPlugin
 LUMIX_PLUGIN_ENTRY(net)
 {
 	IAllocator& allocator = engine.getAllocator();
-	NetPluginImpl* plugin = LUMIX_NEW(allocator, NetPluginImpl)(engine);
+	NetSystemImpl* plugin = LUMIX_NEW(allocator, NetSystemImpl)(engine);
 	if (!plugin->m_is_initialized)
 	{
 		LUMIX_DELETE(allocator, plugin);
