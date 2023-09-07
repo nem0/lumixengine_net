@@ -94,12 +94,12 @@ struct NetSystemImpl : ISystem
 		if (!lua_isfunction(L, 1)) LuaWrapper::argError(L, 1, "function");
 
 		if (that->m_lua_callback_ref != -1) {
-			luaL_unref(that->m_lua_callback_state, LUA_REGISTRYINDEX, that->m_lua_callback_ref);
+			LuaWrapper::luaL_unref(that->m_lua_callback_state, LUA_REGISTRYINDEX, that->m_lua_callback_ref);
 		}
 
 		lua_pushvalue(L, 1);
 		that->m_lua_callback_state = L;
-		that->m_lua_callback_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+		that->m_lua_callback_ref = LuaWrapper::luaL_ref(L, LUA_REGISTRYINDEX);
 		lua_pop(L, 1);
 		return 0;
 	}
