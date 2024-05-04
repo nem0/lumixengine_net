@@ -1,11 +1,11 @@
+#include "core/allocator.h"
+#include "core/array.h"
+#include "core/log.h"
+#include "core/stream.h"
+#include "core/string.h"
 #include "engine/engine.h"
-#include "engine/allocator.h"
-#include "engine/array.h"
 #include "engine/plugin.h"
-#include "engine/log.h"
 #include "engine/lua_wrapper.h"
-#include "engine/stream.h"
-#include "engine/string.h"
 #include "enet/enet.h"
 
 
