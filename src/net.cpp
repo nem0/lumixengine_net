@@ -1,5 +1,6 @@
 #include "core/allocator.h"
 #include "core/array.h"
+#include "core/delegate.h"
 #include "core/log.h"
 #include "core/stream.h"
 #include "core/string.h"
@@ -7,7 +8,7 @@
 #include "engine/plugin.h"
 #include "engine/lua_wrapper.h"
 #include "enet/enet.h"
-
+#include "net.h"
 
 #pragma comment(lib, "Ws2_32.lib")
 #pragma comment(lib, "wininet.lib")
@@ -17,10 +18,7 @@ namespace Lumix
 {
 
 
-typedef int ConnectionHandle;
-
-
-struct NetSystemImpl : ISystem 
+struct NetSystemImpl : NetSystem 
 {
 	enum class Channel : int
 	{
@@ -241,40 +239,42 @@ struct NetSystemImpl : ISystem
 
 	void handleEvent(const ENetEvent& event)
 	{
-		switch (event.type)
-		{
-			case ENET_EVENT_TYPE_CONNECT:
-				{
-					int idx = allocConnection();
-					Connection& conn = m_connections[idx];
-					conn.is_server = true;
-					conn.peer = event.peer;
-					callLuaCallback(event, getConnection(event.peer));
+		switch (event.type) {
+			case ENET_EVENT_TYPE_CONNECT: {
+				ConnectionHandle idx = allocConnection();
+				Connection& conn = m_connections[idx];
+				conn.is_server = true;
+				conn.peer = event.peer;
+				callLuaCallback(event, getConnection(event.peer));
+				if (m_connect_callback.isValid()) {
+					m_connect_callback.invoke(idx);
 				}
 				break;
-			case ENET_EVENT_TYPE_DISCONNECT:
-				{
-					int idx = getConnection(event.peer);
-					if (idx < 0) return;
-					m_connections[idx].peer = nullptr;
-					callLuaCallback(event, getConnection(event.peer));
+			}
+			case ENET_EVENT_TYPE_DISCONNECT: {
+				ConnectionHandle idx = getConnection(event.peer);
+				if (idx < 0) return;
+				m_connections[idx].peer = nullptr;
+				callLuaCallback(event, getConnection(event.peer));
+				if (m_disconnect_callback.isValid()) {
+					m_disconnect_callback.invoke(idx);
 				}
 				break;
+			}
 			case ENET_EVENT_TYPE_RECEIVE:
-				switch ((Channel)event.channelID)
-				{
-					case Channel::RPC:
-						{
-							InputMemoryStream blob(event.packet->data, (int)event.packet->dataLength);
-							RPC(&blob);
-						}
+				switch ((Channel)event.channelID) {
+					case Channel::RPC: {
+						InputMemoryStream blob(event.packet->data, (int)event.packet->dataLength);
+						RPC(&blob);
 						break;
+					}
 					case Channel::LUA_STRING:
 						callLuaCallback(event, getConnection(event.peer));
 						break;
 					case Channel::USER:
-						ASSERT(false);
-						// TODO
+						if (m_receive_callback.isValid()) {
+							m_receive_callback.invoke(Span<const u8>(event.packet->data, event.packet->dataLength));
+						}
 						break;
 					case Channel::COUNT:
 						ASSERT(false);
@@ -285,6 +285,9 @@ struct NetSystemImpl : ISystem
 		}
 	}
 
+	Delegate<void (Span<const u8>)>& onDataReceived() override { return m_receive_callback; } 
+	Delegate<void(ConnectionHandle)>& onConnect() override { return m_connect_callback; }
+	Delegate<void(ConnectionHandle)>& onDisconnect() override { return m_disconnect_callback; }
 
 	void update(float time_delta) override
 	{
@@ -308,8 +311,7 @@ struct NetSystemImpl : ISystem
 	}
 
 
-	bool createServer(u16 port, int max_clients)
-	{
+	bool createServer(u16 port, u32 max_clients) override {
 		ENetAddress address;
 		address.port = port;
 		address.host = ENET_HOST_ANY;
@@ -320,6 +322,9 @@ struct NetSystemImpl : ISystem
 		return true;
 	}
 
+	bool send(ConnectionHandle connection, Span<const u8> data, bool reliable) override {
+		return send(connection, (i32)Channel::USER, data.begin(), data.length(), reliable);
+	}
 
 	bool sendString(ConnectionHandle connection, const char* message, bool reliable)
 	{
@@ -353,12 +358,10 @@ struct NetSystemImpl : ISystem
 	}
 
 
-	ConnectionHandle connect(const char* host_name, u16 port)
-	{
-		if(!m_client_host)
-		{
+	ConnectionHandle connect(const char* host_name, u16 port) override {
+		if(!m_client_host) {
 			m_client_host = enet_host_create(nullptr, 64, (int)Channel::COUNT, 0, 0);
-			if (!m_client_host) return -1;
+			if (!m_client_host) return INVALID_CONNECTION;
 		}
 
 		int idx = allocConnection();
@@ -370,30 +373,25 @@ struct NetSystemImpl : ISystem
 		conn.peer = enet_host_connect(m_client_host, &address, (int)Channel::COUNT, 0);
 		conn.is_server = false;
 
-		return conn.peer ? idx : -1;
+		return conn.peer ? idx : INVALID_CONNECTION;
 	}
 
-	void disconnect(ConnectionHandle idx)
-	{
-		if (idx >= m_connections.size() || !m_connections[idx].peer)
-		{
+	void disconnect(ConnectionHandle idx) override {
+		if (idx >= m_connections.size() || !m_connections[idx].peer) {
 			logError("Trying to close invalid connection.");
 			return;
 		}
 		enet_peer_disconnect(m_connections[idx].peer, 0);
 	}
 
-
 	const char* getName() const override { return "network"; }
-
 
 	Engine& m_engine;
 	IAllocator& m_allocator;
 	ENetHost* m_server_host = nullptr;
 	ENetHost* m_client_host = nullptr;
 
-	struct Connection
-	{
+	struct Connection {
 		ENetPeer* peer = nullptr;
 		bool is_server = false;
 	};
@@ -402,6 +400,9 @@ struct NetSystemImpl : ISystem
 	bool m_is_initialized = false;
 	int m_lua_callback_ref = -1;
 	lua_State* m_lua_callback_state = nullptr;
+	Delegate<void (Span<const u8>)> m_receive_callback;
+	Delegate<void (ConnectionHandle)> m_connect_callback;
+	Delegate<void (ConnectionHandle)> m_disconnect_callback;
 };
 
 
