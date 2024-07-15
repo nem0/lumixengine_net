@@ -12,7 +12,7 @@ struct NetSystem : ISystem {
 
 	virtual bool createServer(u16 port, u32 max_clients) = 0;
 	virtual ConnectionHandle connect(const char* host_name, u16 port) = 0;
-	virtual Delegate<void(Span<const u8>)>& onDataReceived() = 0;
+	virtual Delegate<void(ConnectionHandle, Span<const u8>)>& onDataReceived() = 0;
 	virtual Delegate<void(ConnectionHandle)>& onConnect() = 0;
 	virtual Delegate<void(ConnectionHandle)>& onDisconnect() = 0;
 	virtual bool send(ConnectionHandle connection, Span<const u8> data, bool reliable) = 0;

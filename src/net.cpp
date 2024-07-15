@@ -273,7 +273,9 @@ struct NetSystemImpl : NetSystem
 						break;
 					case Channel::USER:
 						if (m_receive_callback.isValid()) {
-							m_receive_callback.invoke(Span<const u8>(event.packet->data, event.packet->dataLength));
+							ConnectionHandle conn = getConnection(event.peer);
+							Span<const u8> data(event.packet->data, event.packet->dataLength);
+							m_receive_callback.invoke(conn, data);
 						}
 						break;
 					case Channel::COUNT:
@@ -285,7 +287,7 @@ struct NetSystemImpl : NetSystem
 		}
 	}
 
-	Delegate<void (Span<const u8>)>& onDataReceived() override { return m_receive_callback; } 
+	Delegate<void (ConnectionHandle, Span<const u8>)>& onDataReceived() override { return m_receive_callback; }
 	Delegate<void(ConnectionHandle)>& onConnect() override { return m_connect_callback; }
 	Delegate<void(ConnectionHandle)>& onDisconnect() override { return m_disconnect_callback; }
 
@@ -400,7 +402,7 @@ struct NetSystemImpl : NetSystem
 	bool m_is_initialized = false;
 	int m_lua_callback_ref = -1;
 	lua_State* m_lua_callback_state = nullptr;
-	Delegate<void (Span<const u8>)> m_receive_callback;
+	Delegate<void (ConnectionHandle, Span<const u8>)> m_receive_callback;
 	Delegate<void (ConnectionHandle)> m_connect_callback;
 	Delegate<void (ConnectionHandle)> m_disconnect_callback;
 };
