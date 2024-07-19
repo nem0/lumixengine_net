@@ -2,6 +2,7 @@
 #include "core/array.h"
 #include "core/delegate.h"
 #include "core/log.h"
+#include "core/profiler.h"
 #include "core/stream.h"
 #include "core/string.h"
 #include "engine/engine.h"
@@ -283,7 +284,7 @@ struct NetSystemImpl : NetSystem
 						break;
 				}
 				break;
-			case ENET_EVENT_TYPE_NONE: ASSERT(false); break;
+			case ENET_EVENT_TYPE_NONE: break;
 		}
 	}
 
@@ -291,22 +292,45 @@ struct NetSystemImpl : NetSystem
 	Delegate<void(ConnectionHandle)>& onConnect() override { return m_connect_callback; }
 	Delegate<void(ConnectionHandle)>& onDisconnect() override { return m_disconnect_callback; }
 
-	void update(float time_delta) override
-	{
+	void update(float time_delta) override {
+		static u32 bw_in_counter = profiler::createCounter("Net in (B/s)", 0);
+		static u32 bw_out_counter = profiler::createCounter("Net out (B/s)", 0);
+		static u32 total_send_counter = profiler::createCounter("Net total send (KB)", 0);
+		static u32 total_recv_counter = profiler::createCounter("Net total recv (KB)", 0);
 		ENetEvent event;
 
-		if (m_server_host)
-		{
-			while (enet_host_service(m_server_host, &event, 0))
-			{
+		static float timer = 0;
+		timer += time_delta;
+		if (timer > 1) {
+			ENetHost* host = m_server_host ? m_server_host : m_client_host;
+			if (host) {
+				static u32 total_send = host->totalSentData;
+				static u32 total_recv = host->totalReceivedData;
+				float out = (host->totalSentData - total_send) / timer;
+				float in = (host->totalReceivedData - total_recv) / timer;
+				profiler::pushCounter(bw_in_counter, out);
+				profiler::pushCounter(bw_out_counter, in);
+				total_send = host->totalSentData;
+				total_recv = host->totalReceivedData;
+			}
+			timer = 0;
+		}
+
+
+		if (m_server_host) {
+			profiler::pushCounter(total_send_counter, m_server_host->totalSentData / 1024.f);
+			profiler::pushCounter(total_recv_counter, m_server_host->totalReceivedData / 1024.f);
+
+			while (enet_host_service(m_server_host, &event, 0)) {
 				handleEvent(event);
 			}
 		}
 
-		if (m_client_host)
-		{
-			while (enet_host_service(m_client_host, &event, 0))
-			{
+		if (m_client_host) {
+			profiler::pushCounter(total_send_counter, m_client_host->totalSentData / 1024.f);
+			profiler::pushCounter(total_recv_counter, m_client_host->totalReceivedData / 1024.f);
+
+			while (enet_host_service(m_client_host, &event, 0)) {
 				handleEvent(event);
 			}
 		}
