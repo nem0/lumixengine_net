@@ -11,6 +11,7 @@ struct NetSystem : ISystem {
 	static constexpr inline ConnectionHandle INVALID_CONNECTION = -1;
 
 	virtual bool createServer(u16 port, u32 max_clients) = 0;
+	virtual void destroyServer() = 0;
 	virtual ConnectionHandle connect(const char* host_name, u16 port) = 0;
 	virtual Delegate<void(ConnectionHandle, Span<const u8>)>& onDataReceived() = 0;
 	virtual Delegate<void(ConnectionHandle)>& onConnect() = 0;

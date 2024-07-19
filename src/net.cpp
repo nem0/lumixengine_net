@@ -312,6 +312,10 @@ struct NetSystemImpl : NetSystem
 		}
 	}
 
+	void destroyServer() override {
+		if (m_server_host) enet_host_destroy(m_server_host);
+		m_server_host = nullptr;
+	}
 
 	bool createServer(u16 port, u32 max_clients) override {
 		ENetAddress address;
@@ -361,7 +365,7 @@ struct NetSystemImpl : NetSystem
 
 
 	ConnectionHandle connect(const char* host_name, u16 port) override {
-		if(!m_client_host) {
+		if (!m_client_host) {
 			m_client_host = enet_host_create(nullptr, 64, (int)Channel::COUNT, 0, 0);
 			if (!m_client_host) return INVALID_CONNECTION;
 		}
