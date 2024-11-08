@@ -7,8 +7,9 @@
 #include "core/string.h"
 #include "engine/engine.h"
 #include "engine/plugin.h"
-#include "engine/lua_wrapper.h"
 #include "enet/enet.h"
+#include "lua/lua_wrapper.h"
+#include "lua/lua_script_system.h"
 #include "net.h"
 
 #pragma comment(lib, "Ws2_32.lib")
@@ -42,7 +43,10 @@ struct NetSystemImpl : NetSystem
 			return;
 		}
 		m_is_initialized = true;
-		registerLuaAPI(engine.getState());
+	}
+
+	void initBegin() override {
+		registerLuaAPI(getLuaState());
 	}
 
 	void serialize(OutputMemoryStream& serializer) const override {}
@@ -178,11 +182,15 @@ struct NetSystemImpl : NetSystem
 		return -1;
 	}
 
+	lua_State* getLuaState() {
+		auto* lua_system = (LuaScriptSystem*)m_engine.getSystemManager().getSystem("lua_script");
+		return lua_system->getState();
+	}
 
 	void RPC(InputMemoryStream* blob)
 	{
 		const char* func_name = blob->readString();
-		lua_State* L = m_engine.getState();
+		lua_State* L = getLuaState();
 		lua_getglobal(L, "Network"); // [Network]
 		lua_getfield(L, -1, "RPCFunctions"); // [Network, Network.RPCFunctions] 
 		if (!lua_istable(L, -1))
