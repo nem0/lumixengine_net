@@ -1,5 +1,4 @@
-project "net"
-	libType()
+if plugin "net" then
 	files { 
 		"external/**.cpp",
 		"external/**.c",
@@ -10,7 +9,5 @@ project "net"
 	}
 	includedirs { "src", "external/enet/include", "../../external/luau/include" }
 	defines { "BUILDING_NET", "_WINSOCK_DEPRECATED_NO_WARNINGS" }
-	links { "engine" }
-	defaultConfigurations()
-
-linkPlugin("net")
+	dynamic_link_plugin { "engine" }
+end
