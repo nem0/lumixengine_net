@@ -7,10 +7,11 @@
 #include "core/string.h"
 #include "engine/engine.h"
 #include "engine/plugin.h"
-#include "enet/enet.h"
 #include "lua/lua_wrapper.h"
 #include "lua/lua_script_system.h"
 #include "net.h"
+
+#include "enet/enet.h"
 
 #pragma comment(lib, "Ws2_32.lib")
 #pragma comment(lib, "wininet.lib")
