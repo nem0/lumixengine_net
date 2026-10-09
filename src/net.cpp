@@ -7,8 +7,8 @@
 #include "core/string.h"
 #include "engine/engine.h"
 #include "engine/plugin.h"
-#include "lua/lua_wrapper.h"
-#include "lua/lua_script_system.h"
+#include "lua_wrapper.h"
+#include "lua_script_system.h"
 #include "net.h"
 
 #include "enet/enet.h"
@@ -458,4 +458,4 @@ LUMIX_PLUGIN_ENTRY(net)
 }
 
 
-}
+}
